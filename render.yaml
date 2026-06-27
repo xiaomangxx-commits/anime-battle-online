@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: anime-battle-online
+    env: node
+    plan: free
+    buildCommand: ""
+    startCommand: npm start
