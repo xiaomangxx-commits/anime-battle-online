@@ -1,9 +1,9 @@
-const TOTAL_ROUNDS = 10;
-const WIN_SCORE = 8;
+const TOTAL_ROUNDS = 100;
+const WIN_SCORE = 20;
 const START_SCORE = 1;
-const ROUND_SECONDS = 18;
-const FIRST_HINT_AT = 8;
-const SECOND_HINT_AT = 13;
+const ROUND_SECONDS = 13;
+const FIRST_HINT_AT = 4;
+const SECOND_HINT_AT = 8;
 
 const roomInput = document.querySelector("#roomCode");
 const createRoomButton = document.querySelector("#createRoom");
@@ -27,7 +27,6 @@ let roomCode = "";
 let playerId = "";
 let state = null;
 let events = null;
-let tickTimer = null;
 
 const clientId =
   sessionStorage.getItem("anime-battle-client-id") || crypto.randomUUID();
@@ -100,7 +99,7 @@ function setMessage(text) {
 
 function pickOption(name) {
   if (!state || state.status !== "playing" || playerId === "观战") return;
-  if (state.choices[playerId]) return;
+  if (state.buzzer) return;
   sendAction("pick", { name });
 }
 
@@ -116,7 +115,7 @@ function render() {
   if (!hasState) return;
 
   identityNode.textContent = `你是：${playerId}`;
-  roundInfoNode.textContent = `第 ${state.round} / ${TOTAL_ROUNDS} 轮`;
+  roundInfoNode.textContent = `第 ${state.round} / ${TOTAL_ROUNDS} 题`;
   timerNode.textContent =
     state.status === "playing"
       ? `${Math.max(0, Math.ceil((state.roundEndsAt - Date.now()) / 1000))} 秒`
@@ -131,7 +130,7 @@ function render() {
 
   if (state.current) {
     portrait.src = state.current.image;
-    portrait.alt = `第 ${state.round} 轮角色图片`;
+    portrait.alt = `第 ${state.round} 题角色图片`;
     portrait.classList.add("show");
     emptyState.classList.add("hidden");
   } else {
@@ -140,7 +139,7 @@ function render() {
     emptyState.classList.remove("hidden");
     emptyState.querySelector("strong").textContent = "输入或生成房间号";
     emptyState.querySelector("span").textContent =
-      "两个人打开这个页面，进入同一个房间后就能开始。";
+      "两个人进入同一个房间后，开始抢答。";
   }
 
   renderOptions();
@@ -150,7 +149,7 @@ function render() {
 
 function renderHints() {
   if (!state?.current || state.status !== "playing") {
-    hintsNode.replaceChildren(makeHintLine("💡 提示会在第 8 秒和第 13 秒出现"));
+    hintsNode.replaceChildren(makeHintLine("💡 提示会在第 4 秒和第 8 秒出现"));
     return;
   }
 
@@ -176,8 +175,9 @@ function makeHintLine(text) {
 function choiceText(id) {
   if (!state.players[id]) return "等待加入";
   if (state.status === "lobby") return "已进入";
-  if (!state.choices[id]) return state.status === "playing" ? "未选择" : "本轮未选";
-  return "已选择";
+  if (state.buzzer === id) return "已抢答";
+  if (state.status === "playing") return "等待抢答";
+  return "本题未抢";
 }
 
 function renderOptions() {
@@ -188,11 +188,11 @@ function renderOptions() {
     button.type = "button";
     button.className = "option";
     button.textContent = name;
-    button.disabled = state.status !== "playing" || playerId === "观战";
-    if (state.choices[playerId] === name) button.classList.add("selected");
+    button.disabled = state.status !== "playing" || Boolean(state.buzzer) || playerId === "观战";
+    if (state.selectedAnswer === name) button.classList.add("selected");
     if (state.status !== "playing" && state.current?.answer) {
       if (name === state.current.answer) button.classList.add("correct");
-      if (state.choices[playerId] === name && name !== state.current.answer) {
+      if (state.selectedAnswer === name && name !== state.current.answer) {
         button.classList.add("wrong");
       }
     }
@@ -216,11 +216,11 @@ portrait.addEventListener("error", () => {
   portrait.classList.remove("show");
   emptyState.classList.remove("hidden");
   emptyState.querySelector("strong").textContent = "图片加载失败";
-  emptyState.querySelector("span").textContent = "这张网络图可能被拦截了，刷新或重开一局试试。";
-  setMessage("🖼️ 图片加载失败了，这张外链可能暂时不能访问。");
+  emptyState.querySelector("span").textContent = "这张网络图可能暂时不能访问。";
+  setMessage("🖼️ 图片加载失败了，继续抢答或等下一题。");
 });
 
-tickTimer = setInterval(() => {
+setInterval(() => {
   if (!state) return;
   if (state.status === "playing") {
     timerNode.textContent = `${Math.max(0, Math.ceil((state.roundEndsAt - Date.now()) / 1000))} 秒`;

@@ -42,10 +42,6 @@ button {
   background: var(--ink);
   padding: 0 16px;
   cursor: pointer;
-  transition:
-    transform 0.15s ease,
-    opacity 0.15s ease,
-    box-shadow 0.15s ease;
 }
 
 button:hover:not(:disabled) {
@@ -188,8 +184,8 @@ label {
 
 #portrait {
   display: none;
-  width: min(700px, 88vw);
-  aspect-ratio: 16 / 9;
+  width: min(360px, 78vw);
+  max-height: 420px;
   object-fit: contain;
   border-radius: 8px;
   background: #11131d;
