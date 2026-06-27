@@ -30,8 +30,8 @@ let events = null;
 let tickTimer = null;
 
 const clientId =
-  localStorage.getItem("anime-battle-client-id") || crypto.randomUUID();
-localStorage.setItem("anime-battle-client-id", clientId);
+  sessionStorage.getItem("anime-battle-client-id") || crypto.randomUUID();
+sessionStorage.setItem("anime-battle-client-id", clientId);
 
 function randomRoomCode() {
   return Math.random().toString(36).slice(2, 7).toUpperCase();
