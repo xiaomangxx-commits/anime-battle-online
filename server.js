@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 const PORT = process.env.PORT || 3000;
-const TOTAL_ROUNDS = 100;
+const TOTAL_ROUNDS = 10;
 const WIN_SCORE = 20;
 const START_SCORE = 1;
 const ROUND_SECONDS = 13;
@@ -310,10 +310,10 @@ function endGame(room) {
     room.log = `🏆 玩家 ${room.winner} 获胜！`;
   } else if (room.scores.A === room.scores.B) {
     room.winner = "平局";
-    room.log = "🤝 100 题结束，双方平局。";
+    room.log = "🤝 10 轮结束，双方平局。";
   } else {
     room.winner = room.scores.A > room.scores.B ? "A" : "B";
-    room.log = `🏁 100 题结束，玩家 ${room.winner} 分数更高，获胜！`;
+    room.log = `🏁 10 轮结束，玩家 ${room.winner} 分数更高，获胜！`;
   }
 }
 

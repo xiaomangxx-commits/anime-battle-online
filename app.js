@@ -1,4 +1,4 @@
-const TOTAL_ROUNDS = 100;
+const TOTAL_ROUNDS = 10;
 const WIN_SCORE = 20;
 const START_SCORE = 1;
 const ROUND_SECONDS = 13;
@@ -115,7 +115,7 @@ function render() {
   if (!hasState) return;
 
   identityNode.textContent = `你是：${playerId}`;
-  roundInfoNode.textContent = `第 ${state.round} / ${TOTAL_ROUNDS} 题`;
+  roundInfoNode.textContent = `第 ${state.round} / ${TOTAL_ROUNDS} 轮`;
   timerNode.textContent =
     state.status === "playing"
       ? `${Math.max(0, Math.ceil((state.roundEndsAt - Date.now()) / 1000))} 秒`
