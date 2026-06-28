@@ -1,4 +1,4 @@
-const TOTAL_ROUNDS = 10;
+const TOTAL_ROUNDS = 12;
 const WIN_SCORE = 20;
 const START_SCORE = 1;
 const ROUND_SECONDS = 13;
@@ -10,6 +10,7 @@ const createRoomButton = document.querySelector("#createRoom");
 const joinRoomButton = document.querySelector("#joinRoom");
 const startButton = document.querySelector("#startGame");
 const resetButton = document.querySelector("#resetGame");
+const musicToggle = document.querySelector("#musicToggle");
 const portrait = document.querySelector("#portrait");
 const emptyState = document.querySelector("#emptyState");
 const optionsNode = document.querySelector("#options");
@@ -27,6 +28,21 @@ let roomCode = "";
 let playerId = "";
 let state = null;
 let events = null;
+const preloadedImages = new Set();
+let musicOn = false;
+let audioContext = null;
+let musicTimer = null;
+let musicStep = 0;
+let activeTrackId = -1;
+
+const musicPalettes = [
+  [196, 247, 294, 330, 392, 330, 294, 247],
+  [220, 277, 330, 370, 440, 370, 330, 277],
+  [165, 220, 247, 330, 392, 330, 247, 220],
+  [247, 294, 349, 392, 494, 392, 349, 294],
+  [185, 233, 277, 311, 370, 311, 277, 233],
+  [208, 262, 311, 349, 415, 349, 311, 262],
+];
 
 const clientId =
   sessionStorage.getItem("anime-battle-client-id") || crypto.randomUUID();
@@ -129,7 +145,11 @@ function render() {
   }
 
   if (state.current) {
-    portrait.src = state.current.image;
+    const wantedSrc = state.current.image || placeholderUrl(state.current.answer || "角色图片");
+    if (portrait.dataset.src !== wantedSrc) {
+      portrait.dataset.src = wantedSrc;
+      portrait.src = wantedSrc;
+    }
     portrait.alt = `第 ${state.round} 题角色图片`;
     portrait.classList.add("show");
     emptyState.classList.add("hidden");
@@ -144,7 +164,24 @@ function render() {
 
   renderOptions();
   renderHints();
+  preloadImages(state.preloadImages || []);
+  syncMusic();
   setMessage(state.log);
+}
+
+function preloadImages(urls) {
+  for (const url of urls) {
+    if (!url || preloadedImages.has(url)) continue;
+    preloadedImages.add(url);
+    const image = new Image();
+    image.decoding = "async";
+    image.loading = "eager";
+    image.src = url;
+  }
+}
+
+function placeholderUrl(name) {
+  return `/api/placeholder?name=${encodeURIComponent(name || "角色图片")}`;
 }
 
 function renderHints() {
@@ -212,12 +249,20 @@ roomInput.addEventListener("keydown", (event) => {
 });
 startButton.addEventListener("click", () => sendAction("start"));
 resetButton.addEventListener("click", () => sendAction("reset"));
+musicToggle.addEventListener("click", () => {
+  musicOn = !musicOn;
+  musicToggle.textContent = `音乐：${musicOn ? "开" : "关"}`;
+  if (musicOn) startMusic();
+  else stopMusic();
+});
 portrait.addEventListener("error", () => {
-  portrait.classList.remove("show");
-  emptyState.classList.remove("hidden");
-  emptyState.querySelector("strong").textContent = "图片加载失败";
-  emptyState.querySelector("span").textContent = "这张网络图可能暂时不能访问。";
-  setMessage("🖼️ 图片加载失败了，继续抢答或等下一题。");
+  const fallback = placeholderUrl(state?.current?.answer || "角色图片");
+  if (portrait.src.endsWith(fallback)) return;
+  portrait.dataset.src = fallback;
+  portrait.src = fallback;
+  portrait.classList.add("show");
+  emptyState.classList.add("hidden");
+  setMessage("🖼️ 网络图没加载出来，已自动换成本地备用图。");
 });
 
 setInterval(() => {
@@ -227,3 +272,70 @@ setInterval(() => {
   }
   renderHints();
 }, 250);
+
+function syncMusic() {
+  const trackId = state?.musicTrack?.id ?? 0;
+  if (trackId !== activeTrackId) {
+    activeTrackId = trackId;
+    if (musicOn) startMusic();
+  }
+}
+
+function ensureAudio() {
+  if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioContext.state === "suspended") audioContext.resume();
+}
+
+function startMusic() {
+  stopMusic();
+  ensureAudio();
+  musicStep = 0;
+  const trackId = state?.musicTrack?.id ?? 0;
+  const palette = musicPalettes[trackId % musicPalettes.length];
+  const tempo = 138 + (trackId % 8) * 7;
+  const interval = Math.max(115, Math.round(60000 / tempo / 2));
+  musicTimer = setInterval(() => {
+    if (!audioContext || !musicOn) return;
+    const now = audioContext.currentTime;
+    const note = palette[(musicStep + Math.floor(trackId / 3)) % palette.length];
+    const bass = note / (musicStep % 4 === 0 ? 4 : 2);
+    playTone(note, now, 0.11, musicStep % 3 === 0 ? "square" : "triangle", 0.025);
+    if (musicStep % 2 === 0) playTone(bass, now, 0.16, "sawtooth", 0.018);
+    if (musicStep % 8 === 0) playNoise(now, 0.04, 0.03);
+    musicStep += 1;
+  }, interval);
+}
+
+function stopMusic() {
+  if (musicTimer) clearInterval(musicTimer);
+  musicTimer = null;
+}
+
+function playTone(freq, start, duration, type, volume) {
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(volume, start + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+  osc.connect(gain);
+  gain.connect(audioContext.destination);
+  osc.start(start);
+  osc.stop(start + duration + 0.02);
+}
+
+function playNoise(start, duration, volume) {
+  const bufferSize = audioContext.sampleRate * duration;
+  const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i += 1) data[i] = (Math.random() * 2 - 1) * 0.35;
+  const source = audioContext.createBufferSource();
+  const gain = audioContext.createGain();
+  source.buffer = buffer;
+  gain.gain.setValueAtTime(volume, start);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+  source.connect(gain);
+  gain.connect(audioContext.destination);
+  source.start(start);
+}

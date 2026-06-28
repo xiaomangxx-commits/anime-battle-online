@@ -3,15 +3,20 @@ const fs = require("fs");
 const path = require("path");
 
 const PORT = process.env.PORT || 3000;
-const TOTAL_ROUNDS = 10;
+const TOTAL_ROUNDS = 12;
 const WIN_SCORE = 20;
 const START_SCORE = 1;
 const ROUND_SECONDS = 13;
-const NEXT_ROUND_DELAY = 1300;
+const NEXT_ROUND_DELAY = 900;
 const publicDir = __dirname;
 const rooms = new Map();
 const streams = new Map();
 const imageCache = new Map();
+const PREFETCH_AHEAD = 4;
+const musicTracks = Array.from({ length: 30 }, (_, index) => ({
+  id: index,
+  name: `原创热血进行曲 ${String(index + 1).padStart(2, "0")}`,
+}));
 
 const characters = [
   ["漩涡鸣人", "Naruto Uzumaki", "金黄色头发，性格热血不服输。", "外号和九尾有关，口头禅很有名。"],
@@ -136,6 +141,8 @@ function createRoom(code) {
     roundEndsAt: 0,
     roundTimer: null,
     nextRoundTimer: null,
+    deck: [],
+    musicTrack: musicTracks[0],
     log: "🎮 房间已创建，等两位玩家就位。",
   };
 }
@@ -155,6 +162,10 @@ function publicState(room) {
         answer: room.status === "playing" ? null : room.current.answer,
       }
     : null;
+  const preloadImages = room.deck
+    .slice(room.round, room.round + PREFETCH_AHEAD)
+    .map((round) => round.image)
+    .filter(Boolean);
   return {
     code: room.code,
     status: room.status,
@@ -165,9 +176,11 @@ function publicState(room) {
     buzzer: room.buzzer,
     round: room.round,
     current,
+    preloadImages,
     winner: room.winner,
     roundStartedAt: room.roundStartedAt,
     roundEndsAt: room.roundEndsAt,
+    musicTrack: room.musicTrack,
     log: room.log,
   };
 }
@@ -209,15 +222,27 @@ async function startGame(room, resetScores = false) {
   room.selectedAnswer = null;
   room.buzzer = null;
   room.round = resetScores ? 1 : room.round + 1;
-  room.used = resetScores ? [] : room.used;
+  if (resetScores || !room.deck.length) {
+    room.used = [];
+    room.deck = await makeDeck();
+    room.musicTrack = musicTracks[Math.floor(Math.random() * musicTracks.length)];
+  }
   room.winner = null;
-  room.current = await makeRound(room);
-  room.used.push(room.current.characterIndex);
+  room.current = room.deck[room.round - 1] || (await makeRound(room));
+  await ensureRoundImage(room.current);
+  warmImages(room, room.round);
   room.roundStartedAt = Date.now();
   room.roundEndsAt = room.roundStartedAt + ROUND_SECONDS * 1000;
   room.log = `⚡ 第 ${room.round} 题开始，快抢！`;
   room.roundTimer = setTimeout(() => finishRoundByTimeout(room), ROUND_SECONDS * 1000);
   broadcast(room);
+}
+
+async function makeDeck() {
+  const picked = shuffle(characters.map((_, index) => index)).slice(0, TOTAL_ROUNDS);
+  const rounds = picked.map((index) => makeRoundFromIndex(index));
+  await Promise.all(rounds.slice(0, PREFETCH_AHEAD).map((round) => ensureRoundImage(round)));
+  return rounds;
 }
 
 async function makeRound(room) {
@@ -226,23 +251,50 @@ async function makeRound(room) {
     .map((_, index) => index)
     .filter((index) => !room.used.includes(index));
   const pickedIndex = available[Math.floor(Math.random() * available.length)];
+  const round = makeRoundFromIndex(pickedIndex);
+  await ensureRoundImage(round);
+  room.used.push(pickedIndex);
+  return round;
+}
+
+function makeRoundFromIndex(pickedIndex) {
   const answer = characters[pickedIndex];
   const wrong = shuffle(decoys.filter((name) => name !== answer.name)).slice(0, 2);
   return {
     characterIndex: pickedIndex,
     answer: answer.name,
-    image: await findCharacterImage(answer),
+    image: "",
     hints: answer.hints,
     options: shuffle([answer.name, ...wrong]),
   };
 }
 
+async function ensureRoundImage(round) {
+  if (!round || round.image) return;
+  round.image = await findCharacterImage(characters[round.characterIndex]);
+}
+
+function warmImages(room, fromRound) {
+  const targets = room.deck.slice(fromRound, fromRound + PREFETCH_AHEAD);
+  for (const round of targets) {
+    ensureRoundImage(round)
+      .then(() => broadcast(room))
+      .catch(() => {});
+  }
+}
+
 async function findCharacterImage(character) {
   if (imageCache.has(character.query)) return imageCache.get(character.query);
-  const fallback = `https://placehold.co/500x700/20212b/ffffff?text=${encodeURIComponent(character.name)}`;
+  const fallback = `/api/placeholder?name=${encodeURIComponent(character.name)}`;
   try {
     const url = `https://api.jikan.moe/v4/characters?q=${encodeURIComponent(character.query)}&limit=1`;
-    const response = await fetch(url, { headers: { "User-Agent": "anime-battle-online" } });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2200);
+    const response = await fetch(url, {
+      headers: { "User-Agent": "anime-battle-online" },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
     const json = await response.json();
     const image = json?.data?.[0]?.images?.jpg?.image_url || fallback;
     imageCache.set(character.query, image);
@@ -310,10 +362,10 @@ function endGame(room) {
     room.log = `🏆 玩家 ${room.winner} 获胜！`;
   } else if (room.scores.A === room.scores.B) {
     room.winner = "平局";
-    room.log = "🤝 10 轮结束，双方平局。";
+    room.log = `🤝 ${TOTAL_ROUNDS} 轮结束，双方平局。`;
   } else {
     room.winner = room.scores.A > room.scores.B ? "A" : "B";
-    room.log = `🏁 10 轮结束，玩家 ${room.winner} 分数更高，获胜！`;
+    room.log = `🏁 ${TOTAL_ROUNDS} 轮结束，玩家 ${room.winner} 分数更高，获胜！`;
   }
 }
 
@@ -332,14 +384,22 @@ function broadcast(room) {
   const roomStreams = streams.get(room.code);
   if (!roomStreams) return;
   const payload = `data: ${JSON.stringify(publicState(room))}\n\n`;
-  for (const response of roomStreams) response.write(payload);
+  for (const response of roomStreams) {
+    response.write(payload);
+  }
 }
 
 function addStream(room, response) {
   if (!streams.has(room.code)) streams.set(room.code, new Set());
   streams.get(room.code).add(response);
+  response.socket?.setNoDelay?.(true);
+  response.flushHeaders?.();
   response.write(`data: ${JSON.stringify(publicState(room))}\n\n`);
+  const ping = setInterval(() => {
+    if (!response.destroyed) response.write(": ping\n\n");
+  }, 15000);
   response.on("close", () => streams.get(room.code)?.delete(response));
+  response.on("close", () => clearInterval(ping));
 }
 
 function sendJson(response, data, status = 200) {
@@ -397,11 +457,41 @@ function serveFile(request, response) {
   });
 }
 
+function sendPlaceholder(response, name) {
+  const safeName = String(name || "角色图片").replace(/[<>&"]/g, "");
+  const initials = safeName.slice(0, 4);
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="700" viewBox="0 0 500 700">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#20212b"/>
+      <stop offset="1" stop-color="#3c6fd1"/>
+    </linearGradient>
+  </defs>
+  <rect width="500" height="700" fill="url(#bg)"/>
+  <circle cx="250" cy="210" r="86" fill="#f7f2e8" opacity="0.92"/>
+  <rect x="126" y="322" width="248" height="220" rx="72" fill="#f7f2e8" opacity="0.92"/>
+  <path d="M120 300 C160 230 340 230 380 300" fill="none" stroke="#f2c94c" stroke-width="18" opacity="0.9"/>
+  <text x="250" y="615" font-family="Arial, sans-serif" font-size="42" font-weight="700" fill="#fff" text-anchor="middle">${initials}</text>
+  <text x="250" y="660" font-family="Arial, sans-serif" font-size="22" fill="#dbe7ff" text-anchor="middle">图片暂时加载失败</text>
+</svg>`;
+  response.writeHead(200, {
+    "Content-Type": "image/svg+xml; charset=utf-8",
+    "Cache-Control": "public, max-age=86400",
+  });
+  response.end(svg);
+}
+
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
   const eventMatch = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]+)\/events$/i);
   const joinMatch = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]+)\/join$/i);
   const actionMatch = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]+)\/action$/i);
+
+  if (request.method === "GET" && url.pathname === "/api/placeholder") {
+    sendPlaceholder(response, url.searchParams.get("name"));
+    return;
+  }
 
   if (request.method === "GET" && eventMatch) {
     const room = getRoom(eventMatch[1]);
@@ -409,6 +499,7 @@ const server = http.createServer(async (request, response) => {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
     });
     addStream(room, response);
     return;
